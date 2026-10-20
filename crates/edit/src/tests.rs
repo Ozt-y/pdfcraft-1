@@ -264,14 +264,15 @@ fn flattening_keeps_a_cloudy_square_it_cannot_draw() {
     case("/BE << /S /C /I 2 >> /AP << /N 6 0 R >>", 1, false);
 }
 
-/// #3213: an annotation on an optional-content layer that is OFF in the default configuration
-/// is hidden and must not be baked into page content by flattening. It stays as an annotation
-/// so its layer still controls it, and nothing is drawn on the page.
+/// #3213: flattening wraps transferable optional-content memberships (`/OC` indirect OCGs and
+/// valid OCMDs, including ISO 32000-1 §8.11.2.2 `/VE` expressions within depth 16) in
+/// `/OC /PCFlOC0 BDC … EMC` and registers them in `/Resources /Properties`, while retaining
+/// annotations with untransferable, malformed, or overly deep `/OC` definitions in `/Annots`.
 #[test]
 fn flattening_leaves_annotations_on_hidden_layers_alone() {
     let page = stream("", " ");
     let form = "<< /Type /XObject /Subtype /Form /BBox [100 600 200 650] /Length 28 >>\nstream\n1 0 0 RG 100 600 100 50 re S\nendstream";
-    let case = |extra: &str, drawn: usize, left: bool| {
+    let case = |extra: &str, drawn: usize, left: bool, bdc: bool| {
         let annot = format!("<< /Type /Annot /Subtype /Square /Rect [100 600 200 650] /C [1 0 0] /AP << /N 6 0 R >> {extra} >>");
         let mut doc = build(&[
             "<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [7 0 R 8 0 R 13 0 R] /D << /OFF [7 0 R] /ON [8 0 R 13 0 R] >> >> >>",
@@ -289,63 +290,48 @@ fn flattening_leaves_annotations_on_hidden_layers_alone() {
             "<< /Type /OCG /Name (Second shown layer) >>",
         ]);
         let before = streams(&doc, 0);
-        assert_eq!(flatten(&mut doc, &[0], true, false).unwrap(), drawn);
+        let expected_oc = doc.get(pdfcraft_cos::ObjRef::new(4, 0)).as_dict().and_then(|d| d.get(b"OC").cloned());
+        assert_eq!(flatten(&mut doc, &[0], true, false).unwrap(), drawn, "{extra}");
         let doc = reopen(&doc);
         let p = &pdfcraft_model::pages(&doc)[0];
-        assert_eq!(p.dict.contains(b"Annots"), left);
+        assert_eq!(p.dict.contains(b"Annots"), left, "{extra}");
         if drawn == 0 {
-            assert_eq!(streams(&doc, 0), before, "nothing was drawn in place of the comment");
+            assert_eq!(streams(&doc, 0), before, "nothing was drawn in place of the retained comment: {extra}");
+        } else {
+            let flat = streams(&doc, 0).pop().unwrap();
+            assert_eq!(flat.contains("/OC /PCFlOC0 BDC") && flat.contains("EMC"), bdc, "{extra}: {flat}");
+            if bdc {
+                let res = doc.resolve(p.dict.get(b"Resources").unwrap());
+                let props = doc.resolve(res.as_dict().unwrap().get(b"Properties").unwrap());
+                assert_eq!(props.as_dict().unwrap().get(b"PCFlOC0").cloned(), expected_oc, "{extra}");
+            }
         }
     };
-    case("/OC 7 0 R", 0, true);
-    case("/OC 8 0 R", 1, false);
-    case("/OC 9 0 R", 0, true);
-    case("/OC 10 0 R", 1, false);
-    case("/OC 11 0 R", 1, false);
-    case("/OC 12 0 R", 0, true);
-    case("", 1, false);
-    // ISO 32000-1 §8.11.2.2 /VE visibility expressions take precedence over /P.
-    case("/OC << /Type /OCMD /VE [ /Not 7 0 R ] >>", 1, false);
-    case("/OC << /Type /OCMD /VE [ /Not 8 0 R ] >>", 0, true);
-    case("/OC << /Type /OCMD /VE [ /And 8 0 R 7 0 R ] >>", 0, true);
-    case("/OC << /Type /OCMD /VE [ /Or 8 0 R 7 0 R ] >>", 1, false);
-    case("/OC << /Type /OCMD /VE [ /Or 7 0 R [ /And 8 0 R 13 0 R ] ] >>", 1, false);
-    case("/OC << /Type /OCMD /VE [ /And 8 0 R [ /Not 13 0 R ] ] >>", 0, true);
-    case("/OC << /Type /OCMD /VE [ /Not 8 0 R ] /OCGs [8 0 R] /P /AllOn >>", 0, true);
-    case("/OC << /Type /OCMD /VE [ /Not 7 0 R ] /OCGs [7 0 R] /P /AllOn >>", 1, false);
-    case("/OC << /Type /OCMD /VE [] /OCGs [7 0 R] /P /AllOn >>", 0, true);
-    case("/OC << /Type /OCMD /VE [ /Not 7 0 R 8 0 R ] /OCGs [7 0 R] /P /AllOn >>", 0, true);
-    case("/OC << /Type /OCMD /VE [ /Xor 8 0 R ] /OCGs [7 0 R] /P /AllOn >>", 0, true);
+    case("/OC 7 0 R", 1, false, true);
+    case("/OC 8 0 R", 1, false, true);
+    case("/OC 9 0 R", 1, false, true);
+    case("/OC 10 0 R", 1, false, true);
+    case("/OC 11 0 R", 1, false, true);
+    case("/OC 12 0 R", 1, false, true);
+    case("", 1, false, false);
+    // Valid ISO 32000-1 §8.11.2.2 /VE visibility expressions are transferred with their OCMD.
+    case("/OC << /Type /OCMD /VE [ /Not 7 0 R ] >>", 1, false, true);
+    case("/OC << /Type /OCMD /VE [ /Not 8 0 R ] >>", 1, false, true);
+    case("/OC << /Type /OCMD /VE [ /And 8 0 R 7 0 R ] >>", 1, false, true);
+    case("/OC << /Type /OCMD /VE [ /Or 8 0 R 7 0 R ] >>", 1, false, true);
+    case("/OC << /Type /OCMD /VE [ /Or 7 0 R [ /And 8 0 R 13 0 R ] ] >>", 1, false, true);
+    case("/OC << /Type /OCMD /VE [ /And 8 0 R [ /Not 13 0 R ] ] >>", 1, false, true);
+    case("/OC << /Type /OCMD /VE [ /Not 8 0 R ] /OCGs [8 0 R] /P /AllOn >>", 1, false, true);
+    case("/OC << /Type /OCMD /VE [ /Not 7 0 R ] /OCGs [7 0 R] /P /AllOn >>", 1, false, true);
+    // Malformed /VE, invalid /P, inline /OCG, and /VE exceeding depth 16 fail closed and stay in /Annots.
+    case("/OC << /Type /OCG /Name (Inline layer) >>", 0, true, false);
+    case("/OC << /Type /OCMD /OCGs [8 0 R] /P /InvalidPolicy >>", 0, true, false);
+    case("/OC << /Type /OCMD /VE 8 0 R /OCGs [8 0 R] /P /AllOn >>", 0, true, false);
+    case("/OC << /Type /OCMD /VE [] /OCGs [7 0 R] /P /AllOn >>", 0, true, false);
+    case("/OC << /Type /OCMD /VE [ /Not 7 0 R 8 0 R ] /OCGs [7 0 R] /P /AllOn >>", 0, true, false);
+    case("/OC << /Type /OCMD /VE [ /Xor 8 0 R ] /OCGs [7 0 R] /P /AllOn >>", 0, true, false);
     let deep_ve = format!("{}8 0 R{}", "[ /Not ".repeat(17), " ]".repeat(17));
-    case(&format!("/OC << /Type /OCMD /VE {deep_ve} /OCGs [8 0 R] /P /AllOn >>"), 0, true);
-
-    let case_all_on = |extra: &str, drawn: usize, left: bool| {
-        let annot = format!("<< /Type /Annot /Subtype /Square /Rect [100 600 200 650] /C [1 0 0] /AP << /N 6 0 R >> {extra} >>");
-        let mut doc = build(&[
-            "<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [7 0 R 8 0 R] /D << /ON [7 0 R 8 0 R] >> >> >>",
-            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
-            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Resources << >> /Contents 5 0 R /Annots [4 0 R] >>",
-            &annot,
-            &page,
-            form,
-            "<< /Type /OCG /Name (First layer) >>",
-            "<< /Type /OCG /Name (Second layer) >>",
-            "<< /Type /OCMD /OCGs [7 0 R 8 0 R] /P /AllOn >>",
-            "<< /Type /OCMD /OCGs [7 0 R 8 0 R] /P /AnyOn >>",
-            "<< /Type /OCMD /OCGs [7 0 R 8 0 R] /P /AnyOff >>",
-            "<< /Type /OCMD /OCGs [7 0 R 8 0 R] /P /AllOff >>",
-        ]);
-        let before = streams(&doc, 0);
-        assert_eq!(flatten(&mut doc, &[0], true, false).unwrap(), drawn);
-        let doc = reopen(&doc);
-        let p = &pdfcraft_model::pages(&doc)[0];
-        assert_eq!(p.dict.contains(b"Annots"), left);
-        if drawn == 0 {
-            assert_eq!(streams(&doc, 0), before, "nothing was drawn in place of the comment");
-        }
-    };
-    case_all_on("/OC 11 0 R", 0, true);
-    case_all_on("/OC 12 0 R", 0, true);
+    case(&format!("/OC << /Type /OCMD /VE {deep_ve} /OCGs [8 0 R] /P /AllOn >>"), 0, true, false);
 }
 
 /// #805: a supported note with no stored appearance is still drawn by viewers. Flattening must
