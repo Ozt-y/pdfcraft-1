@@ -250,6 +250,24 @@ fn unsupported_membership_keeps_annotations_replies_and_field_links() {
     let before = saved(&doc);
     assert_eq!(pdfcraft_edit::flatten(&mut doc, &[0], true, false).unwrap(), 0);
     assert_eq!(saved(&doc), before);
+
+    // Shared-subexpression /VE fan-out (10^16 paths within depth 16) stops at the node budget
+    // and retains the annotation unchanged instead of hanging.
+    let mut doc = fixture("/OC 9 0 R", 4, "");
+    let mut target = ObjRef::new(4, 0);
+    for _ in 0..16 {
+        let mut expr = vec![Object::Name(b"Or".to_vec())];
+        expr.extend(std::iter::repeat_n(Object::Ref(target), 10));
+        target = doc.add(Object::Array(expr));
+    }
+    let ve = (*doc.get(target)).clone();
+    doc.update_dict(ObjRef::new(9, 0), |d| {
+        d.set(b"VE".to_vec(), ve.clone());
+    })
+    .unwrap();
+    let before = saved(&doc);
+    assert_eq!(pdfcraft_edit::flatten(&mut doc, &[0], true, false).unwrap(), 0);
+    assert_eq!(saved(&doc), before);
 }
 
 /// Preserve a malformed reply that targets a retained popup instead of a markup annotation.

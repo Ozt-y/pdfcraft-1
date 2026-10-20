@@ -265,9 +265,10 @@ fn flattening_keeps_a_cloudy_square_it_cannot_draw() {
 }
 
 /// #3213: flattening wraps transferable optional-content memberships (`/OC` indirect OCGs and
-/// valid OCMDs, including ISO 32000-1 §8.11.2.2 `/VE` expressions within depth 16) in
-/// `/OC /PCFlOC0 BDC … EMC` and registers them in `/Resources /Properties`, while retaining
-/// annotations with untransferable, malformed, or overly deep `/OC` definitions in `/Annots`.
+/// valid OCMDs, including ISO 32000-1 §8.11.2.2 `/VE` expressions within depth 16 and the
+/// 4,096-node visit budget) in `/OC /PCFlOC0 BDC … EMC` and registers them in
+/// `/Resources /Properties`, while retaining annotations with untransferable, malformed,
+/// overly deep, or over-budget `/OC` definitions in `/Annots`.
 #[test]
 fn flattening_leaves_annotations_on_hidden_layers_alone() {
     let page = stream("", " ");
@@ -288,6 +289,11 @@ fn flattening_leaves_annotations_on_hidden_layers_alone() {
             "<< /Type /OCMD /OCGs [7 0 R 8 0 R] /P /AnyOff >>",
             "<< /Type /OCMD /OCGs [7 0 R 8 0 R] /P /AllOff >>",
             "<< /Type /OCG /Name (Second shown layer) >>",
+            "[ /Or 15 0 R 15 0 R 15 0 R 15 0 R ]",
+            "[ /Or 16 0 R 16 0 R 16 0 R 16 0 R ]",
+            "[ /Or 17 0 R 17 0 R 17 0 R 17 0 R ]",
+            "[ /Or 18 0 R 18 0 R 18 0 R 18 0 R ]",
+            "[ /Or 8 0 R 8 0 R 8 0 R 8 0 R ]",
         ]);
         let before = streams(&doc, 0);
         let expected_oc = doc.get(pdfcraft_cos::ObjRef::new(4, 0)).as_dict().and_then(|d| d.get(b"OC").cloned());
@@ -323,7 +329,7 @@ fn flattening_leaves_annotations_on_hidden_layers_alone() {
     case("/OC << /Type /OCMD /VE [ /And 8 0 R [ /Not 13 0 R ] ] >>", 1, false, true);
     case("/OC << /Type /OCMD /VE [ /Not 8 0 R ] /OCGs [8 0 R] /P /AllOn >>", 1, false, true);
     case("/OC << /Type /OCMD /VE [ /Not 7 0 R ] /OCGs [7 0 R] /P /AllOn >>", 1, false, true);
-    // Malformed /VE, invalid /P, inline /OCG, and /VE exceeding depth 16 fail closed and stay in /Annots.
+    // Malformed /VE, invalid /P, inline /OCG, and /VE exceeding depth 16 or the node budget fail closed and stay in /Annots.
     case("/OC << /Type /OCG /Name (Inline layer) >>", 0, true, false);
     case("/OC << /Type /OCMD /OCGs [8 0 R] /P /InvalidPolicy >>", 0, true, false);
     case("/OC << /Type /OCMD /VE 8 0 R /OCGs [8 0 R] /P /AllOn >>", 0, true, false);
@@ -332,6 +338,7 @@ fn flattening_leaves_annotations_on_hidden_layers_alone() {
     case("/OC << /Type /OCMD /VE [ /Xor 8 0 R ] /OCGs [7 0 R] /P /AllOn >>", 0, true, false);
     let deep_ve = format!("{}8 0 R{}", "[ /Not ".repeat(17), " ]".repeat(17));
     case(&format!("/OC << /Type /OCMD /VE {deep_ve} /OCGs [8 0 R] /P /AllOn >>"), 0, true, false);
+    case("/OC << /Type /OCMD /VE [ /Or 14 0 R 14 0 R 14 0 R 14 0 R ] /OCGs [8 0 R] /P /AllOn >>", 0, true, false);
 }
 
 /// #805: a supported note with no stored appearance is still drawn by viewers. Flattening must

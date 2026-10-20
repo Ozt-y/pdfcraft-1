@@ -106,19 +106,21 @@ fn properties(doc: &Document, page: &Dict) -> Option<Dict> {
     }
 }
 
-/// Validate an ISO 32000-1 §8.11.2.2 `/VE` visibility expression within recursion depth 16.
-fn valid_ve(doc: &Document, expr: &Object, depth: usize) -> bool {
-    if depth > 16 {
+/// Validate an ISO 32000-1 §8.11.2.2 `/VE` visibility expression within recursion depth 16
+/// and a shared node-visit `budget`.
+fn valid_ve(doc: &Document, expr: &Object, depth: usize, budget: &mut usize) -> bool {
+    if depth > 16 || *budget == 0 {
         return false;
     }
+    *budget -= 1;
     let resolved = doc.resolve(expr);
     if let Some(arr) = resolved.as_array() {
         let [op, rest @ ..] = arr.as_slice() else { return false };
         let op_obj = doc.resolve(op);
         let Some(name) = op_obj.as_name() else { return false };
         match (name, rest) {
-            (b"Not", [operand]) => valid_ve(doc, operand, depth + 1),
-            (b"And" | b"Or", [_, ..]) => rest.iter().all(|o| valid_ve(doc, o, depth + 1)),
+            (b"Not", [operand]) => valid_ve(doc, operand, depth + 1, budget),
+            (b"And" | b"Or", [_, ..]) => rest.iter().all(|o| valid_ve(doc, o, depth + 1, budget)),
             _ => false,
         }
     } else if depth > 0 {
@@ -136,7 +138,7 @@ fn valid_ocmd(doc: &Document, d: &Dict) -> bool {
         return false;
     }
     if let Some(ve) = d.get(b"VE")
-        && !valid_ve(doc, ve, 0)
+        && !valid_ve(doc, ve, 0, &mut 4096)
     {
         return false;
     }
